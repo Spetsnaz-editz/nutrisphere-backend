@@ -1,5 +1,5 @@
 {
-  "name": "vitasphere-server",
+  "name": "nutrisphere-server",
   "type": "module",
   "dependencies": {
     "body-parser": "^2.2.1",
