@@ -3,8 +3,8 @@ import cors from "cors";
 import dotenv from "dotenv";
 import Groq from "groq-sdk";
 import multer from "multer";
-import Tesseract from "tesseract.js";
 import { createRequire } from "module";
+import Tesseract from "tesseract.js";
 
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
@@ -13,124 +13,86 @@ dotenv.config();
 
 const app = express();
 
-// CORS FIX FOR RENDER
-app.use(
-    cors({
-        origin: "*",
-        methods: ["GET", "POST"],
-        allowedHeaders: ["Content-Type"],
-    })
-);
-
+// CORS
+app.use(cors({ origin: "*", methods: ["GET", "POST"], allowedHeaders: ["Content-Type"] }));
 app.use(express.json());
 
-// ----------- GROQ CLIENT ----------
+// -------- GROQ CLIENT ----------
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// ----------- MEMORY -----------
+// -------- MEMORY (OPTIONAL) ----------
 let conversationMemory = [];
-
-// keep last 10 messages
-function updateMemory(user, bot) {
+function saveMemory(user, bot) {
     conversationMemory.push({ role: "user", content: user });
     conversationMemory.push({ role: "assistant", content: bot });
-
-    if (conversationMemory.length > 10) {
-        conversationMemory = conversationMemory.slice(-10);
-    }
+    if (conversationMemory.length > 10) conversationMemory.shift();
 }
 
-// --------------------------------
-//         AI CHAT ROUTE
-// --------------------------------
-app.post("/api/ai", async (req, res) => {
+// ===============================================================
+// 1️⃣ CHATBOT ROUTE  — POST /api/chat
+// ===============================================================
+app.post("/api/chat", async (req, res) => {
     try {
-        const { message } = req.body;
-
-        if (!message) {
-            return res.status(400).json({ error: "Message is required" });
+        const userMessage = req.body.message;
+        if (!userMessage) {
+            return res.status(400).json({ error: "Missing 'message' field" });
         }
 
-        const messages = [
-            {
-                role: "system",
-                content: `You are Guilty Spark 343… futuristic health AI assistant.`,
-            },
-            ...conversationMemory,
-            { role: "user", content: message },
-        ];
-
-        const stream = await groq.chat.completions.create({
-            model: "llama-3.1-8b-instant",
-            messages,
-            stream: true,
+        const completion = await groq.chat.completions.create({
+            model: "llama-3.3-70b-versatile",   // ACTIVE MODEL
+            messages: [
+                { role: "system", content: "You are Guilty Spark 343, a helpful, knowledgeable AI assistant. Specialist in human health and nutrition" },
+                { role: "user", content: userMessage }
+            ]
         });
 
-        res.setHeader("Content-Type", "text/event-stream");
-        res.setHeader("Cache-Control", "no-cache");
-        res.setHeader("Connection", "keep-alive");
+        const botReply = completion.choices[0]?.message?.content || "No response";
+        res.send(botReply);
 
-        let fullReply = "";
-
-        for await (const chunk of stream) {
-            const token = chunk.choices?.[0]?.delta?.content || "";
-            fullReply += token;
-            res.write(token);
-        }
-
-        updateMemory(message, fullReply);
-        res.end();
     } catch (err) {
-        console.error(err);
-        res.status(500).end("ERROR");
+        console.error("GROQ ERROR:", err);
+        res.status(500).json({ error: "AI error" });
     }
 });
 
-// --------------------------------
-//     HEALTH REPORT ANALYSIS
-// --------------------------------
-const upload = multer();
+// ===============================================================
+// 2️⃣ HEALTH REPORT OCR — POST /api/health
+// ===============================================================
+const upload = multer({ storage: multer.memoryStorage() });
 
-app.post("/api/analyze-report", upload.single("file"), async (req, res) => {
+app.post("/api/health", upload.single("file"), async (req, res) => {
     try {
-        if (!req.file) {
-            return res.status(400).send("No file uploaded.");
-        }
+        if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
         let text = "";
 
-        // PDF
         if (req.file.mimetype === "application/pdf") {
-            const pdf = await pdfParse(req.file.buffer);
-            text = pdf.text;
-        } 
-        // IMAGE
-        else {
+            const pdfData = await pdfParse(req.file.buffer);
+            text = pdfData.text;
+        } else {
             const result = await Tesseract.recognize(req.file.buffer, "eng");
             text = result.data.text;
         }
 
-        const completion = await groq.chat.completions.create({
-            model: "llama-3.1-70b-versatile",
+        const ai = await groq.chat.completions.create({
+            model: "llama3-70b-8192",
             messages: [
-                { role: "system", content: "You are a futuristic medical analyst…" },
-                { role: "user", content: text },
-            ],
+                { role: "system", content: "You are a medical report analyzer." },
+                { role: "user", content: `Analyze this medical report:\n${text}` }
+            ]
         });
 
-        const reply = completion.choices[0].message.content;
-        res.send(reply);
-    } catch (e) {
-        console.error(e);
-        res.status(500).send("Error analyzing health report.");
+        res.send(ai.choices[0].message.content);
+    } catch (err) {
+        console.error("HEALTH ERROR:", err);
+        res.status(500).json({ error: "Failed to analyze report." });
     }
 });
 
-// --------------------------------
-//      START SERVER FOR RENDER
-// --------------------------------
-const PORT = process.env.PORT || 3000;
-
+// ===============================================================
+// 3️⃣ START SERVER
+// ===============================================================
+const PORT = 3000;
 app.listen(PORT, () => {
-    console.log(`🚀 Groq AI server running on port ${PORT}`);
+    console.log(`🚀 AI Server running at http://localhost:${PORT}`);
 });
